@@ -1,4 +1,4 @@
-# OpenWrt-for-XG-040G-MD
+# OpenWrt for XG-040G-MD
 
 OpenWrt firmware for NOKIA BELL XG-040G-MD
 
