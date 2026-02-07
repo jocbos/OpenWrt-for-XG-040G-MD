@@ -61,9 +61,16 @@ jobs:
             gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
             python3-setuptools rsync swig unzip zlib1g-dev file wget \
             mkbootimg device-tree-compiler
+          if command -v mkbootimg >/dev/null 2>&1; then
+            echo "mkbootimg found at: $(command -v mkbootimg)"
+          else
+            echo "❌ mkbootimg not found in PATH!"
+          fi
 
           if [[ -n "$TZ" ]]; then
             sudo timedatectl set-timezone "$TZ"
+          else
+            echo "TZ is not set, skipping timezone setup."
           fi
 
       - name: Ensure Python build tools
@@ -93,13 +100,14 @@ jobs:
           fi
           ./scripts/feeds update -a
           ./scripts/feeds install -a -f
+          wget -O feeds/packages/lang/rust/Makefile https://raw.githubusercontent.com/immortalwrt/packages/refs/heads/master/lang/rust/Makefile
 
       - name: Install third-party packages (homeproxy, passwall)
         working-directory: ./openwrt/package
         run: |
           chmod +x $GITHUB_WORKSPACE/scripts/update-packages.sh
           bash $GITHUB_WORKSPACE/scripts/update-packages.sh
-
+          
       - name: Copy configuration and defconfig
         run: |
           cp -fv "${CONFIG_FILE}" openwrt/.config
@@ -119,6 +127,7 @@ jobs:
         working-directory: ./openwrt
         run: |
           make download -j4 V=s
+          # Remove small incomplete files <1KB
           find dl -size -1024c -delete
 
       - name: Compile OpenWrt firmware
@@ -168,12 +177,13 @@ jobs:
         id: tag
         if: env.UPLOAD_RELEASE == 'true'
         run: |
-          echo "release_tag=$(date +\"%Y.%m.%d-%H%M\")" >> $GITHUB_OUTPUT
+          echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
           cat <<EOF > release.txt
           🚀 OpenWrt firmware for XG-040G-MD (My Branch)
           ----------------------
           设备型号: XG-040G-MD
-          构建时间: $(date +\"%Y-%m-%d %H:%M\")
+          构建时间: $(date +"%Y-%m-%d %H:%M")
+          内核版本: 6.12.X
           源码仓库: $REPO_URL
           分支: $REPO_BRANCH
           EOF
@@ -186,5 +196,13 @@ jobs:
           bodyFile: release.txt
           artifacts: |
             ${{ env.FIRMWARE }}/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          retain_days: 7
+          keep_minimum_runs: 5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
