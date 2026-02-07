@@ -31,6 +31,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+
+      - name: Space usage check
+        run: df -h
+
       - name: Setup environment dependencies
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -67,6 +77,16 @@ jobs:
           [ -e patch/02_network ] && cp -f patch/02_network openwrt/target/linux/airoha/an7581/base-files/etc/board.d/02_network
           [ -e patch/an7581.mk ] && cp -f patch/an7581.mk openwrt/target/linux/airoha/image/an7581.mk
           [ -e patch/an7581-bell_xg-040g-md.dts ] && cp -f patch/an7581-bell_xg-040g-md.dts openwrt/target/linux/airoha/dts/an7581-bell_xg-040g-md.dts          
+
+      - name: Move build dirs to /mnt/openwrt
+        run: |
+          sudo mkdir -p /mnt/openwrt/{dl,staging_dir,build_dir}
+          sudo chown -R "$USER:$(id -gn)" /mnt/openwrt
+          rm -rf openwrt/dl openwrt/staging_dir openwrt/build_dir
+          ln -sfn /mnt/openwrt/dl openwrt/dl
+          ln -sfn /mnt/openwrt/staging_dir openwrt/staging_dir
+          ln -sfn /mnt/openwrt/build_dir openwrt/build_dir
+          df -h
 
       - name: Update & Install feeds
         working-directory: ./openwrt
@@ -109,10 +129,22 @@ jobs:
         id: compile
         run: |
           cd openwrt
+          echo "Disk usage before compile:"
+          df -h
           if [[ "${{ inputs.log_switch }}" == "true" ]]; then
-            make -j1 V=s
+            make -j1 V=s || {
+              echo "Compile failed, disk usage diagnostics:"
+              df -h
+              du -h -d1 . | sort -h | tail -n 30
+              exit 1
+            }
           else
-            make -j$(nproc)
+            make -j$(nproc) || {
+              echo "Compile failed, disk usage diagnostics:"
+              df -h
+              du -h -d1 . | sort -h | tail -n 30
+              exit 1
+            }
           fi
           DEVICE_NAME=$(grep -o 'CONFIG_TARGET.*DEVICE_[^=]*=y' .config | head -1 | sed 's/.*DEVICE_\(.*\)=y/\1/')
           if [[ -n "$DEVICE_NAME" ]]; then
