@@ -1,4 +1,4 @@
-name: Build_XG_040G_MD_MyBranch
+name: Build_XG_040G_MD_ForkMain
 
 permissions:
   contents: write
@@ -24,7 +24,7 @@ on:
 env:
   CONFIG_FILE: "config/xg-040g-md.config"
   REPO_URL: https://github.com/xiangtailiang/openwrt.git
-  REPO_BRANCH: xg040-adaptation-patch
+  REPO_BRANCH: main
   FEEDS_CONF: feeds.conf.default
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
@@ -205,7 +205,7 @@ jobs:
         run: |
           echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
           cat <<EOF > release.txt
-          🚀 OpenWrt firmware for XG-040G-MD (My Branch)
+          🚀 OpenWrt firmware for XG-040G-MD (Fork main)
           ----------------------
           设备型号: XG-040G-MD
           构建时间: $(date +"%Y-%m-%d %H:%M")
