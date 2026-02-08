@@ -19,7 +19,7 @@ env:
   # REPO_URL: https://github.com/openwrt/openwrt.git
   #REPO_BRANCH: main
   REPO_URL: https://github.com/bingoguo93/immortalwrt
-  REPO_BRANCH: openwrt-25.12
+  REPO_BRANCH: openwrt-24.10
  # FEEDS_CONF: feeds.conf.default
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
