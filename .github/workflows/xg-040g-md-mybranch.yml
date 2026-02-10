@@ -102,6 +102,28 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-dl-
 
+      - name: Cache Toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            /mnt/openwrt/staging_dir/host*
+            /mnt/openwrt/staging_dir/tool*
+          key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-toolchain-${{ hashFiles('feeds.conf.default') }}
+          restore-keys: |
+            ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-toolchain-
+
+      - name: Initialize Toolchain
+        run: |
+          if [ -d "/mnt/openwrt/staging_dir" ]; then
+            find "/mnt/openwrt/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r DIR; do
+              find "$DIR" -type f -exec touch {} +
+            done
+            mkdir -p openwrt/tmp && echo "1" > openwrt/tmp/.build
+            echo "Toolchain initialized from cache!"
+          else
+            echo "Toolchain cache miss!"
+          fi
+
       - name: Restore ccache
         uses: actions/cache/restore@v4
         with:
