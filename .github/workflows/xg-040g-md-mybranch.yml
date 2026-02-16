@@ -84,6 +84,11 @@ jobs:
         run: |
           git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" openwrt
 
+      - name: Apply SkyHigh SPI-NAND robust read workaround
+        run: |
+          cp -fv patch/600-mtd-spinand-add-skyhigh-robust-read-workaround.patch \
+            openwrt/target/linux/generic/pending-6.12/
+
       - name: Move build dirs to /mnt/openwrt
         run: |
           sudo mkdir -p /mnt/openwrt/{dl,staging_dir,build_dir,ccache}
