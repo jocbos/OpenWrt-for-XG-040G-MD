@@ -1,21 +1,31 @@
 #!/bin/bash
-# XG-040G-MD 编译前配置脚本
-# 在 feeds update 之前执行
+# XG-040G-MD (Airoha EN7581) 预配置脚本 - 简化版
 
-echo "运行 diy-part1.sh - XG-040G-MD Airoha 平台预配置"
+set -e
 
-# 添加自定义软件源
-echo "src-git airoha_packages https://github.com/xiangtailiang/openwrt.git;main" >> feeds.conf.default
+echo "========================================"
+echo "diy-part1.sh - 开始预配置"
+echo "========================================"
 
 # 创建必要的目录
-mkdir -p files/etc/config
-mkdir -p files/etc/rc.d
+mkdir -p files/etc/uci-defaults
 
-# 设置默认IP地址
+# 添加软件源
+cat >> feeds.conf.default <<EOF
+src-git kenzo https://github.com/kenzok8/openwrt-packages.git;master
+src-git small https://github.com/kenzok8/small.git;master
+EOF
+
+# 创建IP设置脚本
 cat > files/etc/uci-defaults/99-ip-set << 'EOF'
 #!/bin/sh
 uci set network.lan.ipaddr='192.168.3.1'
 uci commit network
 exit 0
 EOF
+
+# 添加执行权限
 chmod +x files/etc/uci-defaults/99-ip-set
+
+echo "✅ 预配置完成"
+echo "========================================"
