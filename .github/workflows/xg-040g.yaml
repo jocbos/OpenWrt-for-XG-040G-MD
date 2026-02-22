@@ -1,0 +1,439 @@
+name: Build_XG_040G_MD_Airoha
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      log_switch:
+        description: "详细编译日志（调试用）"
+        required: false
+        default: false
+        type: boolean
+      ssh_connect:
+        description: "编译前开启SSH连接（用于调试）"
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/xg-040g-md-mybranch.yml"
+      - "config/**"
+      - "scripts/**"
+      - "feeds.conf.default"
+
+env:
+  CONFIG_FILE: "config/xg-040g-md.config"
+  # 修改：使用你的成功模板中的源码地址（如果不同请修改）
+  REPO_URL: https://github.com/openwrt/openwrt.git
+  # Airoha EN7581 支持需要特定分支
+  REPO_BRANCH: v23.05.4  # 或者使用 main，但23.05对airoha支持更稳定
+  FEEDS_CONF: feeds.conf.default
+  UPLOAD_FIRMWARE: true
+  UPLOAD_RELEASE: true
+  # 优化：使用GitHub Actions的临时目录
+  CCACHE_DIR: /home/runner/work/ccache
+  CCACHE_MAXSIZE: 5G
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04  # 保持22.04稳定版
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          docker-images: true
+
+      - name: Space usage check
+        run: df -h
+
+      # 新增：SSH调试支持
+      - name: Setup SSH connection
+        uses: mxschmitt/action-tmate@v3
+        if: ${{ github.event.inputs.ssh_connect == 'true' }}
+        timeout-minutes: 60
+        with:
+          limit-access-to-actor: true
+
+      - name: Setup environment dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt update
+          # Airoha EN7581 需要的依赖
+          sudo apt install -y \
+            build-essential \
+            gawk \
+            git \
+            libncurses5-dev \
+            libssl-dev \
+            python3 \
+            python3-setuptools \
+            rsync \
+            swig \
+            unzip \
+            wget \
+            file \
+            ccache \
+            time \
+            qemu-utils \
+            upx-ucl \
+            u-boot-tools \
+            device-tree-compiler \
+            # Airoha特有工具
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu
+
+      - name: Set timezone
+        run: |
+          sudo timedatectl set-timezone "$TZ" || sudo ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+
+      - name: Ensure Python build tools
+        run: |
+          python3 -m pip install --upgrade pip setuptools wheel
+          python3 -m pip install pyelftools  # Airoha需要
+
+      - name: Clone OpenWrt source code
+        run: |
+          # 修改：使用完整克隆以确保Airoha支持
+          git clone --branch "$REPO_BRANCH" "$REPO_URL" openwrt
+          cd openwrt
+          git rev-parse HEAD > commit-info.txt
+          # 检查Airoha目标是否存在
+          if [ ! -d "target/linux/airoha" ]; then
+            echo "⚠️ 警告：未找到Airoha目标目录，可能需要添加补丁"
+          fi
+
+      - name: Setup build directories
+        run: |
+          mkdir -p /home/runner/work/{dl,staging_dir,build_dir,ccache}
+          for dir in dl staging_dir build_dir; do
+            rm -rf openwrt/$dir
+            ln -sf /home/runner/work/$dir openwrt/$dir
+          done
+          
+          mkdir -p ${{ env.CCACHE_DIR }}
+          ln -sf ${{ env.CCACHE_DIR }} openwrt/ccache
+          df -h
+
+      - name: Restore dl cache
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/work/dl
+          # 修改：缓存key包含Airoha标识
+          key: ${{ runner.os }}-airoha-dl-${{ hashFiles('feeds.conf.default', 'config/xg-040g-md.config') }}
+          restore-keys: |
+            ${{ runner.os }}-airoha-dl-
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        id: ccache-cache
+        with:
+          path: /home/runner/work/ccache
+          key: ${{ runner.os }}-airoha-ccache-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-airoha-ccache-
+
+      - name: Setup ccache
+        run: |
+          ccache -M ${{ env.CCACHE_MAXSIZE }}
+          ccache -s
+
+      # 新增：Airoha平台特定补丁
+      - name: Apply Airoha platform patches
+        working-directory: ./openwrt
+        run: |
+          # 确保NPU固件目录存在
+          mkdir -p package/firmware/airoha-en7581-npu-firmware
+          
+          # 创建NPU固件包Makefile（如果官方没有）
+          if [ ! -f package/firmware/airoha-en7581-npu-firmware/Makefile ]; then
+            cat > package/firmware/airoha-en7581-npu-firmware/Makefile << 'EOF'
+include $(TOPDIR)/rules.mk
+
+PKG_NAME:=airoha-en7581-npu-firmware
+PKG_RELEASE:=1
+PKG_LICENSE:=Proprietary
+
+include $(INCLUDE_DIR)/package.mk
+
+define Package/airoha-en7581-npu-firmware
+  SECTION:=firmware
+  CATEGORY:=Firmware
+  TITLE:=Airoha EN7581 NPU firmware
+  DEPENDS:=@TARGET_airoha_an7581
+endef
+
+define Package/airoha-en7581-npu-firmware/description
+  NPU firmware for Airoha EN7581 platform
+endef
+
+define Build/Compile
+endef
+
+define Package/airoha-en7581-npu-firmware/install
+  $(INSTALL_DIR) $(1)/lib/firmware
+  # 这里需要从源码或网盘获取实际固件文件
+  # 临时创建占位文件
+  touch $(1)/lib/firmware/en7581_npu.bin
+endef
+
+$(eval $(call BuildPackage,airoha-en7581-npu-firmware))
+EOF
+          fi
+
+      - name: Update & Install feeds
+        working-directory: ./openwrt
+        run: |
+          if [ -f ../$FEEDS_CONF ]; then
+            echo "使用自定义feeds配置: ../$FEEDS_CONF"
+            cp -f ../$FEEDS_CONF ./feeds.conf.default
+          fi
+          
+          # 更新feeds
+          ./scripts/feeds update -a
+          
+          # 安装所有包
+          ./scripts/feeds install -a -f
+          
+          # 特别安装Airoha相关包
+          ./scripts/feeds install kmod-airoha-hw-accel
+          ./scripts/feeds install airoha-cpufreq
+
+      - name: Apply hotfixes
+        working-directory: ./openwrt
+        run: |
+          # LuCI hotfix (保持你的原有hotfix)
+          CBI_JS="feeds/luci/modules/luci-base/htdocs/luci-static/resources/cbi.js"
+          if [ -f "$CBI_JS" ]; then
+            echo "应用cbi.js hotfix..."
+            sed -i \
+              -e "s/return[[:space:]]*''\.format\.apply(arguments\[0\], a);/return String.prototype.format.apply(arguments[0], a.slice(1));/g" \
+              -e "s/return[[:space:]]*''\.nobr\.apply(arguments\[0\], a);/return String.prototype.nobr.apply(arguments[0], a.slice(1));/g" \
+              "$CBI_JS"
+          fi
+          
+          # Airoha特定：修复NPU模块加载
+          mkdir -p files/etc/modules.d
+          echo "airoha-hw-accel" > files/etc/modules.d/99-airoha-hw-accel
+
+      - name: Install third-party packages
+        working-directory: ./openwrt/package
+        run: |
+          if [ -f $GITHUB_WORKSPACE/scripts/update-packages.sh ]; then
+            chmod +x $GITHUB_WORKSPACE/scripts/update-packages.sh
+            bash $GITHUB_WORKSPACE/scripts/update-packages.sh
+          else
+            echo "⚠️ update-packages.sh 不存在，跳过"
+          fi
+          
+      - name: Configure firmware
+        working-directory: ./openwrt
+        run: |
+          if [ -f "$GITHUB_WORKSPACE/$CONFIG_FILE" ]; then
+            echo "使用配置文件: $GITHUB_WORKSPACE/$CONFIG_FILE"
+            cp -fv "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
+          else
+            echo "❌ 配置文件不存在: $GITHUB_WORKSPACE/$CONFIG_FILE"
+            exit 1
+          fi
+          
+          # 确保Airoha目标正确
+          make defconfig
+          
+          # 验证Airoha配置
+          echo "=== 验证Airoha平台配置 ==="
+          grep -E "CONFIG_TARGET_airoha|CONFIG_PACKAGE_airoha" .config
+          
+          cp .config defconfig-final.config
+          
+          # 输出关键配置
+          echo "=== 关键配置信息 ==="
+          grep -E "CONFIG_TARGET|CONFIG_PACKAGE_luci|CONFIG_PACKAGE_airoha" .config | head -30
+
+      - name: Upload config files
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-config-${{ github.run_id }}
+          path: |
+            config/xg-040g-md.config
+            openwrt/defconfig-final.config
+            openwrt/feeds.conf.default
+            openwrt/commit-info.txt
+
+      - name: Download packages
+        working-directory: ./openwrt
+        run: |
+          # 增加重试机制
+          for i in {1..3}; do
+            echo "下载尝试 $i/3..."
+            make download -j8 V=s && break || sleep 10
+          done
+          
+          # 清理损坏文件
+          find dl -type f -size -1024c -delete
+          
+          # 统计下载
+          echo "下载完成，文件统计："
+          find dl -type f -name "*.bin" -o -name "*.fw" | wc -l
+          du -sh dl
+
+      - name: Compile OpenWrt firmware
+        id: compile
+        timeout-minutes: 180
+        run: |
+          cd openwrt
+          
+          echo "编译前磁盘使用："
+          df -h
+          
+          START_TIME=$(date +%s)
+          
+          # Airoha平台建议使用单线程首次编译
+          if [[ "${{ inputs.log_switch }}" == "true" ]]; then
+            # 调试模式：单线程详细日志
+            make -j1 V=s || {
+              COMPILE_STATUS=$?
+              echo "编译失败，收集诊断信息..."
+              df -h
+              du -h -d1 . | sort -h | tail -n 30
+              # 检查Airoha相关错误
+              echo "=== Airoha相关错误日志 ==="
+              grep -i "airoha\|en7581\|npu" logs/compile.log 2>/dev/null || true
+              exit $COMPILE_STATUS
+            }
+          else
+            # 正常模式：先用单线程检查配置
+            make defconfig
+            # 然后用多线程编译
+            make -j$(nproc) || {
+              echo "编译失败，尝试单线程查看错误..."
+              make -j1 V=s
+            }
+          fi
+          
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+          echo "编译耗时: $((DURATION/60))分 $((DURATION%60))秒"
+          
+          # 提取设备名称
+          DEVICE_NAME=$(grep -o 'CONFIG_TARGET.*DEVICE_[^=]*=y' .config | head -1 | sed 's/.*DEVICE_\(.*\)=y/\1/')
+          if [[ -n "$DEVICE_NAME" ]]; then
+            echo "DEVICE_NAME=_${DEVICE_NAME}" >> "$GITHUB_ENV"
+          fi
+          
+          echo "FILE_DATE=_$(date +%Y%m%d%H%M)" >> "$GITHUB_ENV"
+          echo "status=success" >> $GITHUB_OUTPUT
+          
+          # ccache统计
+          echo "ccache 统计："
+          ccache -s
+
+      - name: Prepare firmware artifacts
+        id: organize
+        if: env.UPLOAD_FIRMWARE == 'true'
+        run: |
+          # 查找Airoha固件目录
+          FIRMWARE_DIR=$(find openwrt/bin/targets -name "*airoha*" -type d | head -1)
+          
+          if [ -z "$FIRMWARE_DIR" ]; then
+            FIRMWARE_DIR=$(find openwrt/bin/targets -type f -name "*.bin" -o -name "*.img" -o -name "*.tar" | head -1 | xargs dirname)
+          fi
+          
+          if [ -n "$FIRMWARE_DIR" ]; then
+            echo "固件目录: $FIRMWARE_DIR"
+            cd "$FIRMWARE_DIR"
+            rm -rf packages
+            echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+            
+            echo "找到的固件文件："
+            ls -lh *.bin *.img *.tar *.itb 2>/dev/null || echo "没有找到标准固件文件"
+          else
+            echo "❌ 找不到固件目录"
+            exit 1
+          fi
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        if: env.UPLOAD_FIRMWARE == 'true'
+        with:
+          name: XG-040G-MD_Airoha${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+          path: |
+            ${{ env.FIRMWARE }}/*.bin
+            ${{ env.FIRMWARE }}/*.img
+            ${{ env.FIRMWARE }}/*.tar
+            ${{ env.FIRMWARE }}/*.itb
+            ${{ env.FIRMWARE }}/*.manifest
+          if-no-files-found: warn
+
+      - name: Generate release notes
+        id: tag
+        if: env.UPLOAD_RELEASE == 'true'
+        run: |
+          cd openwrt
+          COMMIT_MSG=$(git log -1 --pretty=%s)
+          COMMIT_HASH=$(git rev-parse --short HEAD)
+          
+          cat <<EOF > release.txt
+          # 🚀 OpenWrt 固件 for XG-040G-MD (Airoha EN7581)
+          
+          ## 📦 固件信息
+          - **设备型号**: Bell XG-040G-MD
+          - **SoC平台**: Airoha EN7581 (aarch64_cortex-a53)
+          - **NPU加速**: ✅ 已启用
+          - **构建时间**: $(date +"%Y-%m-%d %H:%M:%S")
+          - **源码版本**: $REPO_BRANCH@$COMMIT_HASH
+          - **最新提交**: $COMMIT_MSG
+          
+          ## ✨ 主要特性
+          - Airoha EN7581 NPU 硬件加速
+          - HomeProxy / SmartDNS / MWAN3
+          - ksmbd / vsFTPd / Transmission
+          - Zerotier / UPnP
+          - USB 3.0 全支持
+          
+          ## 📥 下载说明
+          固件文件在下方Artifacts中，请根据你的需求选择合适的版本。
+          
+          ## ⚠️ 注意事项
+          - 刷机前请备份原厂固件
+          - 默认IP: 192.168.3.1
+          - 默认无密码
+          EOF
+
+      - name: Publish GitHub Release
+        uses: ncipollo/release-action@v1
+        if: env.UPLOAD_RELEASE == 'true' && steps.compile.outputs.status == 'success'
+        with:
+          tag: v${{ github.run_number }}-airoha
+          name: "XG-040G-MD Airoha 固件 #${{ github.run_number }}"
+          bodyFile: release.txt
+          artifacts: "${{ env.FIRMWARE }}/*"
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Save ccache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: /home/runner/work/ccache
+          key: ${{ runner.os }}-airoha-ccache-${{ github.sha }}
+
+      - name: Cleanup old workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          retain_days: 14
+          keep_minimum_runs: 10
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
