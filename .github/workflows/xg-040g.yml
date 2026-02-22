@@ -21,13 +21,13 @@ on:
     branches:
       - main
     paths:
-      - ".github/workflows/xg-040g-md-mybranch.yml"
+      - ".github/workflows/xg-040g.yml"
       - "config/**"
       - "scripts/**"
       - "feeds.conf.default"
 
 env:
-  CONFIG_FILE: "config/xg-040g-md.config"
+  CONFIG_FILE: "config/xg-040.config"
   # 修改：使用你的成功模板中的源码地址（如果不同请修改）
   REPO_URL: https://github.com/openwrt/openwrt.git
   # Airoha EN7581 支持需要特定分支
