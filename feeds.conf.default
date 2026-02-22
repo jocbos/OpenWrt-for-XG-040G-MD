@@ -1,0 +1,27 @@
+# XG-040G-MD (Airoha EN7581) feeds配置
+# 基于成功编译模板优化
+
+# OpenWrt 官方源 (使用23.05稳定版，对airoha支持更好)
+src-git packages https://github.com/openwrt/packages.git;openwrt-23.05
+src-git luci https://github.com/openwrt/luci.git;openwrt-23.05
+src-git routing https://github.com/openwrt/routing.git;openwrt-23.05
+src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
+
+# Airoha 平台特定源 (如果你的fork包含airoha支持)
+# 如果使用你的fork，这里可以指向你的仓库
+# src-git airoha https://github.com/xiangtailiang/openwrt.git;main
+
+# ImmortalWrt 源 (提供更多插件)
+src-git immortalwrt_luci https://github.com/immortalwrt/luci.git;openwrt-23.05
+src-git immortalwrt_packages https://github.com/immortalwrt/packages.git;openwrt-23.05
+
+# kenzok8 插件源 (包含smartdns, homeproxy等)
+src-git kenzo https://github.com/kenzok8/openwrt-packages.git;master
+src-git small https://github.com/kenzok8/small.git;master
+
+# 第三方包 (本地)
+src-link thirdparty package/thirdparty
+
+# 可选：passwall 源 (如果需要)
+# src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main
+# src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main
