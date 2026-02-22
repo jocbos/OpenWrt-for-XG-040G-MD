@@ -17,32 +17,26 @@ on:
         required: false
         default: false
         type: boolean
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/xg-040g.yml"
-      - "config/**"
-      - "scripts/**"
-      - "feeds.conf.default"
+      clean_build:
+        description: "清理编译环境（完整重编）"
+        required: false
+        default: false
+        type: boolean
 
 env:
-  CONFIG_FILE: "config/xg-040.config"
-  # 修改：使用你的成功模板中的源码地址（如果不同请修改）
+  CONFIG_FILE: "config/xg-040g.config"
   REPO_URL: https://github.com/openwrt/openwrt.git
-  # Airoha EN7581 支持需要特定分支
-  REPO_BRANCH: v23.05.4  # 或者使用 main，但23.05对airoha支持更稳定
+  REPO_BRANCH: v23.05.4
   FEEDS_CONF: feeds.conf.default
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
-  # 优化：使用GitHub Actions的临时目录
   CCACHE_DIR: /home/runner/work/ccache
   CCACHE_MAXSIZE: 5G
   TZ: Asia/Shanghai
 
 jobs:
   build:
-    runs-on: ubuntu-22.04  # 保持22.04稳定版
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout
@@ -59,7 +53,7 @@ jobs:
       - name: Space usage check
         run: df -h
 
-      # 新增：SSH调试支持
+      # SSH调试支持
       - name: Setup SSH connection
         uses: mxschmitt/action-tmate@v3
         if: ${{ github.event.inputs.ssh_connect == 'true' }}
@@ -72,7 +66,6 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt update
-          # Airoha EN7581 需要的依赖
           sudo apt install -y \
             build-essential \
             gawk \
@@ -92,7 +85,6 @@ jobs:
             upx-ucl \
             u-boot-tools \
             device-tree-compiler \
-            # Airoha特有工具
             gcc-aarch64-linux-gnu \
             binutils-aarch64-linux-gnu
 
@@ -103,18 +95,24 @@ jobs:
       - name: Ensure Python build tools
         run: |
           python3 -m pip install --upgrade pip setuptools wheel
-          python3 -m pip install pyelftools  # Airoha需要
+          python3 -m pip install pyelftools
 
       - name: Clone OpenWrt source code
         run: |
-          # 修改：使用完整克隆以确保Airoha支持
           git clone --branch "$REPO_BRANCH" "$REPO_URL" openwrt
           cd openwrt
           git rev-parse HEAD > commit-info.txt
-          # 检查Airoha目标是否存在
+          # 检查Airoha目标
           if [ ! -d "target/linux/airoha" ]; then
-            echo "⚠️ 警告：未找到Airoha目标目录，可能需要添加补丁"
+            echo "⚠️ 警告：未找到Airoha目标目录"
           fi
+
+      # 清理编译环境（可选）
+      - name: Clean build directories
+        if: ${{ github.event.inputs.clean_build == 'true' }}
+        run: |
+          rm -rf /home/runner/work/{dl,staging_dir,build_dir,ccache}
+          echo "已清理编译缓存"
 
       - name: Setup build directories
         run: |
@@ -132,8 +130,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /home/runner/work/dl
-          # 修改：缓存key包含Airoha标识
-          key: ${{ runner.os }}-airoha-dl-${{ hashFiles('feeds.conf.default', 'config/xg-040g-md.config') }}
+          key: ${{ runner.os }}-airoha-dl-${{ hashFiles('feeds.conf.default', 'config/xg-040g.config') }}
           restore-keys: |
             ${{ runner.os }}-airoha-dl-
 
@@ -142,7 +139,7 @@ jobs:
         id: ccache-cache
         with:
           path: /home/runner/work/ccache
-          key: ${{ runner.os }}-airoha-ccache-${{ github.sha }}
+          key: ${{ runner.os }}-airoha-ccache-${{ github.run_id }}
           restore-keys: |
             ${{ runner.os }}-airoha-ccache-
 
@@ -151,124 +148,106 @@ jobs:
           ccache -M ${{ env.CCACHE_MAXSIZE }}
           ccache -s
 
-      # 新增：Airoha平台特定补丁
-      - name: Apply Airoha platform patches
-        working-directory: ./openwrt
+      # 关键修复：检查配置文件是否存在
+      - name: Check config file
         run: |
-          # 确保NPU固件目录存在
-          mkdir -p package/firmware/airoha-en7581-npu-firmware
-          
-          # 创建NPU固件包Makefile（如果官方没有）
-          if [ ! -f package/firmware/airoha-en7581-npu-firmware/Makefile ]; then
-            cat > package/firmware/airoha-en7581-npu-firmware/Makefile << 'EOF'
-include $(TOPDIR)/rules.mk
+          if [ ! -f "${{ env.CONFIG_FILE }}" ]; then
+            echo "❌ 配置文件不存在: ${{ env.CONFIG_FILE }}"
+            echo "当前目录文件列表："
+            ls -la config/
+            exit 1
+          else
+            echo "✅ 找到配置文件: ${{ env.CONFIG_FILE }}"
+            echo "配置文件前20行："
+            head -20 "${{ env.CONFIG_FILE }}"
+          fi
 
-PKG_NAME:=airoha-en7581-npu-firmware
-PKG_RELEASE:=1
-PKG_LICENSE:=Proprietary
-
-include $(INCLUDE_DIR)/package.mk
-
-define Package/airoha-en7581-npu-firmware
-  SECTION:=firmware
-  CATEGORY:=Firmware
-  TITLE:=Airoha EN7581 NPU firmware
-  DEPENDS:=@TARGET_airoha_an7581
-endef
-
-define Package/airoha-en7581-npu-firmware/description
-  NPU firmware for Airoha EN7581 platform
-endef
-
-define Build/Compile
-endef
-
-define Package/airoha-en7581-npu-firmware/install
-  $(INSTALL_DIR) $(1)/lib/firmware
-  # 这里需要从源码或网盘获取实际固件文件
-  # 临时创建占位文件
-  touch $(1)/lib/firmware/en7581_npu.bin
-endef
-
-$(eval $(call BuildPackage,airoha-en7581-npu-firmware))
-EOF
+      # ========== 执行 diy-part1.sh（编译前配置） ==========
+      - name: Run diy-part1.sh (pre-feed configuration)
+        run: |
+          if [ -f "scripts/diy-part1.sh" ]; then
+            echo "执行 diy-part1.sh..."
+            chmod +x scripts/diy-part1.sh
+            bash scripts/diy-part1.sh
+          else
+            echo "⚠️ 未找到 diy-part1.sh，跳过"
           fi
 
       - name: Update & Install feeds
         working-directory: ./openwrt
         run: |
+          # 复制feeds配置
           if [ -f ../$FEEDS_CONF ]; then
-            echo "使用自定义feeds配置: ../$FEEDS_CONF"
+            echo "使用自定义feeds配置"
             cp -f ../$FEEDS_CONF ./feeds.conf.default
+          else
+            echo "⚠️ 未找到自定义feeds配置，使用默认"
           fi
           
           # 更新feeds
           ./scripts/feeds update -a
-          
-          # 安装所有包
           ./scripts/feeds install -a -f
-          
-          # 特别安装Airoha相关包
-          ./scripts/feeds install kmod-airoha-hw-accel
-          ./scripts/feeds install airoha-cpufreq
 
-      - name: Apply hotfixes
-        working-directory: ./openwrt
+      # ========== 执行 update-packages.sh（安装第三方包） ==========
+      - name: Run update-packages.sh (third-party packages)
         run: |
-          # LuCI hotfix (保持你的原有hotfix)
-          CBI_JS="feeds/luci/modules/luci-base/htdocs/luci-static/resources/cbi.js"
-          if [ -f "$CBI_JS" ]; then
-            echo "应用cbi.js hotfix..."
-            sed -i \
-              -e "s/return[[:space:]]*''\.format\.apply(arguments\[0\], a);/return String.prototype.format.apply(arguments[0], a.slice(1));/g" \
-              -e "s/return[[:space:]]*''\.nobr\.apply(arguments\[0\], a);/return String.prototype.nobr.apply(arguments[0], a.slice(1));/g" \
-              "$CBI_JS"
-          fi
-          
-          # Airoha特定：修复NPU模块加载
-          mkdir -p files/etc/modules.d
-          echo "airoha-hw-accel" > files/etc/modules.d/99-airoha-hw-accel
-
-      - name: Install third-party packages
-        working-directory: ./openwrt/package
-        run: |
-          if [ -f $GITHUB_WORKSPACE/scripts/update-packages.sh ]; then
-            chmod +x $GITHUB_WORKSPACE/scripts/update-packages.sh
-            bash $GITHUB_WORKSPACE/scripts/update-packages.sh
+          if [ -f "scripts/update-packages.sh" ]; then
+            echo "执行 update-packages.sh..."
+            chmod +x scripts/update-packages.sh
+            bash scripts/update-packages.sh
           else
-            echo "⚠️ update-packages.sh 不存在，跳过"
+            echo "⚠️ 未找到 update-packages.sh，跳过"
           fi
-          
+
+      # ========== 执行 diy-part2.sh（编译前最终配置） ==========
+      - name: Run diy-part2.sh (post-feed configuration)
+        run: |
+          if [ -f "scripts/diy-part2.sh" ]; then
+            echo "执行 diy-part2.sh..."
+            chmod +x scripts/diy-part2.sh
+            bash scripts/diy-part2.sh
+          else
+            echo "⚠️ 未找到 diy-part2.sh，跳过"
+          fi
+
+      # ========== 执行 check-config.sh（配置检查） ==========
+      - name: Run check-config.sh (verify configuration)
+        run: |
+          if [ -f "scripts/check-config.sh" ]; then
+            echo "执行 check-config.sh..."
+            chmod +x scripts/check-config.sh
+            bash scripts/check-config.sh
+          else
+            echo "⚠️ 未找到 check-config.sh，跳过"
+          fi
+
       - name: Configure firmware
         working-directory: ./openwrt
         run: |
-          if [ -f "$GITHUB_WORKSPACE/$CONFIG_FILE" ]; then
-            echo "使用配置文件: $GITHUB_WORKSPACE/$CONFIG_FILE"
-            cp -fv "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
-          else
-            echo "❌ 配置文件不存在: $GITHUB_WORKSPACE/$CONFIG_FILE"
-            exit 1
-          fi
+          # 复制配置文件
+          cp -fv "../$CONFIG_FILE" .config
           
-          # 确保Airoha目标正确
+          # 生成完整配置
           make defconfig
           
-          # 验证Airoha配置
-          echo "=== 验证Airoha平台配置 ==="
-          grep -E "CONFIG_TARGET_airoha|CONFIG_PACKAGE_airoha" .config
-          
+          # 保存最终配置
           cp .config defconfig-final.config
           
-          # 输出关键配置
-          echo "=== 关键配置信息 ==="
-          grep -E "CONFIG_TARGET|CONFIG_PACKAGE_luci|CONFIG_PACKAGE_airoha" .config | head -30
+          # 验证Airoha配置
+          echo "=== Airoha平台配置验证 ==="
+          grep -E "CONFIG_TARGET_airoha|CONFIG_PACKAGE_airoha" .config || echo "⚠️ 未找到Airoha配置"
+          
+          # 输出关键配置统计
+          echo "=== 配置统计 ==="
+          grep -c "CONFIG_PACKAGE_" .config | xargs echo "已启用软件包数量:"
+          grep -c "=y" .config | xargs echo "总启用选项数量:"
 
       - name: Upload config files
         uses: actions/upload-artifact@v4
         with:
           name: build-config-${{ github.run_id }}
           path: |
-            config/xg-040g-md.config
+            ${{ env.CONFIG_FILE }}
             openwrt/defconfig-final.config
             openwrt/feeds.conf.default
             openwrt/commit-info.txt
@@ -276,7 +255,7 @@ EOF
       - name: Download packages
         working-directory: ./openwrt
         run: |
-          # 增加重试机制
+          # 下载重试机制
           for i in {1..3}; do
             echo "下载尝试 $i/3..."
             make download -j8 V=s && break || sleep 10
@@ -287,7 +266,7 @@ EOF
           
           # 统计下载
           echo "下载完成，文件统计："
-          find dl -type f -name "*.bin" -o -name "*.fw" | wc -l
+          find dl -type f | wc -l | xargs echo "总文件数:"
           du -sh dl
 
       - name: Compile OpenWrt firmware
@@ -301,32 +280,32 @@ EOF
           
           START_TIME=$(date +%s)
           
-          # Airoha平台建议使用单线程首次编译
+          # 根据log_switch选择编译模式
           if [[ "${{ inputs.log_switch }}" == "true" ]]; then
             # 调试模式：单线程详细日志
-            make -j1 V=s || {
-              COMPILE_STATUS=$?
-              echo "编译失败，收集诊断信息..."
-              df -h
-              du -h -d1 . | sort -h | tail -n 30
-              # 检查Airoha相关错误
-              echo "=== Airoha相关错误日志 ==="
-              grep -i "airoha\|en7581\|npu" logs/compile.log 2>/dev/null || true
-              exit $COMPILE_STATUS
-            }
+            make -j1 V=s 2>&1 | tee compile.log
+            COMPILE_STATUS=${PIPESTATUS[0]}
           else
-            # 正常模式：先用单线程检查配置
-            make defconfig
-            # 然后用多线程编译
-            make -j$(nproc) || {
-              echo "编译失败，尝试单线程查看错误..."
-              make -j1 V=s
-            }
+            # 正常模式：多线程编译
+            make -j$(nproc) 2>&1 | tee compile.log
+            COMPILE_STATUS=${PIPESTATUS[0]}
           fi
           
           END_TIME=$(date +%s)
           DURATION=$((END_TIME - START_TIME))
           echo "编译耗时: $((DURATION/60))分 $((DURATION%60))秒"
+          
+          if [ $COMPILE_STATUS -eq 0 ]; then
+            echo "✅ 编译成功"
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "❌ 编译失败"
+            echo "status=failed" >> $GITHUB_OUTPUT
+            # 输出错误日志最后50行
+            echo "最后50行错误日志："
+            tail -50 compile.log
+            exit $COMPILE_STATUS
+          fi
           
           # 提取设备名称
           DEVICE_NAME=$(grep -o 'CONFIG_TARGET.*DEVICE_[^=]*=y' .config | head -1 | sed 's/.*DEVICE_\(.*\)=y/\1/')
@@ -335,18 +314,24 @@ EOF
           fi
           
           echo "FILE_DATE=_$(date +%Y%m%d%H%M)" >> "$GITHUB_ENV"
-          echo "status=success" >> $GITHUB_OUTPUT
           
           # ccache统计
           echo "ccache 统计："
           ccache -s
 
+      - name: Save ccache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: /home/runner/work/ccache
+          key: ${{ runner.os }}-airoha-ccache-${{ github.run_id }}
+
       - name: Prepare firmware artifacts
         id: organize
-        if: env.UPLOAD_FIRMWARE == 'true'
+        if: env.UPLOAD_FIRMWARE == 'true' && steps.compile.outputs.status == 'success'
         run: |
-          # 查找Airoha固件目录
-          FIRMWARE_DIR=$(find openwrt/bin/targets -name "*airoha*" -type d | head -1)
+          # 查找固件目录
+          FIRMWARE_DIR=$(find openwrt/bin/targets -type d -name "*image*" -o -name "*squashfs*" | head -1)
           
           if [ -z "$FIRMWARE_DIR" ]; then
             FIRMWARE_DIR=$(find openwrt/bin/targets -type f -name "*.bin" -o -name "*.img" -o -name "*.tar" | head -1 | xargs dirname)
@@ -355,19 +340,18 @@ EOF
           if [ -n "$FIRMWARE_DIR" ]; then
             echo "固件目录: $FIRMWARE_DIR"
             cd "$FIRMWARE_DIR"
-            rm -rf packages
+            rm -rf packages 2>/dev/null || true
             echo "FIRMWARE=$PWD" >> $GITHUB_ENV
             
             echo "找到的固件文件："
-            ls -lh *.bin *.img *.tar *.itb 2>/dev/null || echo "没有找到标准固件文件"
+            ls -lh *.bin *.img *.tar *.itb 2>/dev/null || echo "没有找到固件文件"
           else
-            echo "❌ 找不到固件目录"
-            exit 1
+            echo "⚠️ 找不到固件目录"
           fi
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
-        if: env.UPLOAD_FIRMWARE == 'true'
+        if: env.UPLOAD_FIRMWARE == 'true' && steps.compile.outputs.status == 'success'
         with:
           name: XG-040G-MD_Airoha${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
           path: |
@@ -380,7 +364,7 @@ EOF
 
       - name: Generate release notes
         id: tag
-        if: env.UPLOAD_RELEASE == 'true'
+        if: env.UPLOAD_RELEASE == 'true' && steps.compile.outputs.status == 'success'
         run: |
           cd openwrt
           COMMIT_MSG=$(git log -1 --pretty=%s)
@@ -405,10 +389,9 @@ EOF
           - USB 3.0 全支持
           
           ## 📥 下载说明
-          固件文件在下方Artifacts中，请根据你的需求选择合适的版本。
+          固件文件在下方Artifacts中
           
           ## ⚠️ 注意事项
-          - 刷机前请备份原厂固件
           - 默认IP: 192.168.3.1
           - 默认无密码
           EOF
@@ -422,13 +405,6 @@ EOF
           bodyFile: release.txt
           artifacts: "${{ env.FIRMWARE }}/*"
           token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Save ccache
-        uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: /home/runner/work/ccache
-          key: ${{ runner.os }}-airoha-ccache-${{ github.sha }}
 
       - name: Cleanup old workflow runs
         uses: Mattraks/delete-workflow-runs@v2
