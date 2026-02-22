@@ -15,7 +15,7 @@ echo -e "${GREEN}   XG-040G-MD Airoha EN7581 配置检查  ${NC}"
 echo -e "${GREEN}========================================${NC}"
 
 # 检查配置文件是否存在
-CONFIG_FILE="config/xg-040g.config"
+CONFIG_FILE="config/040g.config"
 if [ ! -f "$CONFIG_FILE" ]; then
     echo -e "${RED}❌ 配置文件不存在: $CONFIG_FILE${NC}"
     exit 1
